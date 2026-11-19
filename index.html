@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Folio — Tactile Book & PDF Reader</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    :root {
+      --bg-desk: #1e1b18;
+      --page-bg: #faf6ee;
+      --page-ink: #231f1a;
+      --accent: #c87d32;
+      --ui-bg: rgba(24, 21, 18, 0.92);
+      --ui-text: #f4efe6;
+      --ui-border: rgba(255, 255, 255, 0.12);
+      --book-font: Georgia, 'Times New Roman', serif;
+      --book-size: 18px;
+      --book-lh: 1.72;
+      --book-pad: 28px;
+      --warmth: 0;
+      --dimmer: 0;
+      --desk-blur: 0px;
+      --desk-tint: 0.35;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-desk); color: var(--ui-text);
+      user-select: none;
+    }
+
+    #warmthOverlay, #dimmerOverlay {
+      position: fixed; inset: 0; pointer-events: none; z-index: 9000;
+    }
+    #warmthOverlay { background: rgba(255, 148, 40, var(--warmth)); mix-blend-mode: multiply; }
+    #dimmerOverlay { background: rgba(0, 0, 0, var(--dimmer)); }
+
+    .view { position: fixed; inset: 0; display: none; flex-direction: column; }
+    .view.active { display: flex; }
+
+    #shelfView {
+      background: linear-gradient(160deg, #1b1815 0%, #12100e 100%);
+      overflow-y: auto; padding: 20px 18px 80px;
+    }
+    .shelf-header {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 12px; margin-bottom: 22px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-logo {
+      width: 38px; height: 38px; border-radius: 10px;
+      background: linear-gradient(135deg, #d98a3c, #8c4a14);
+      display: grid; place-items: center; font-weight: 800; font-size: 20px; color: #fff;
+      box-shadow: 0 4px 14px rgba(217, 138, 60, 0.35);
+    }
+    .brand h1 { font-size: 22px; letter-spacing: 0.4px; }
+    .brand small { display: block; font-size: 11px; opacity: 0.65; }
+
+    .shelf-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      border: 1px solid var(--ui-border); background: rgba(255,255,255,0.07);
+      color: var(--ui-text); padding: 9px 14px; border-radius: 10px;
+      font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex;
+      align-items: center; gap: 6px; transition: 0.18s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+
+    .drop-zone {
+      border: 2px dashed rgba(255,255,255,0.18); border-radius: 14px;
+      padding: 20px; text-align: center; margin-bottom: 24px;
+      background: rgba(255,255,255,0.02); cursor: pointer; transition: 0.2s;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent); background: rgba(200, 125, 50, 0.08);
+    }
+    .drop-zone p { font-size: 14px; opacity: 0.85; }
+    .drop-zone span { font-size: 12px; opacity: 0.55; }
+
+    .shelf-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px;
+    }
+    .book-card {
+      background: rgba(255,255,255,0.05); border: 1px solid var(--ui-border);
+      border-radius: 14px; overflow: hidden; cursor: pointer;
+      display: flex; flex-direction: column; transition: transform 0.2s, border-color 0.2s;
+    }
+    .book-card:hover { transform: translateY(-3px); border-color: var(--accent); }
+    .book-cover {
+      height: 195px; background: linear-gradient(145deg, #3c2a1e, #1d140e);
+      display: flex; flex-direction: column; justify-content: flex-end;
+      padding: 14px; position: relative; overflow: hidden;
+    }
+    .book-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .book-cover-title {
+      position: relative; z-index: 1; font-family: Georgia, serif; font-size: 15px;
+      font-weight: 700; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+      line-height: 1.25;
+    }
+    .book-meta { padding: 10px 12px; font-size: 12px; }
+    .book-meta .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .book-meta .prog { opacity: 0.65; margin-top: 4px; font-size: 11px; }
+    .prog-bar { height: 4px; background: rgba(255,255,255,0.1); border-radius: 4px; margin-top: 6px; overflow: hidden; }
+    .prog-bar i { display: block; height: 100%; background: var(--accent); }
+
+    #readerView { position: relative; background: var(--bg-desk); }
+    #deskBackdrop {
+      position: absolute; inset: 0; background-size: cover; background-position: center;
+      filter: blur(var(--desk-blur)); z-index: 0; transition: background 0.3s;
+    }
+    #deskTint {
+      position: absolute; inset: 0; background: rgba(0,0,0,var(--desk-tint));
+      pointer-events: none; z-index: 1;
+    }
+
+    .reader-bar {
+      position: fixed; left: 0; right: 0; z-index: 100;
+      background: var(--ui-bg); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--ui-border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; gap: 8px; transition: transform 0.25s ease;
+    }
+    #topBar { top: 0; }
+    #bottomBar {
+      bottom: 0; top: auto; border-bottom: none; border-top: 1px solid var(--ui-border);
+      flex-direction: column; padding: 10px 14px;
+    }
+    .bars-hidden #topBar { transform: translateY(-110%); }
+    .bars-hidden #bottomBar { transform: translateY(110%); }
+
+    .bar-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .icon-btn {
+      background: rgba(255,255,255,0.08); border: 1px solid transparent; color: var(--ui-text);
+      height: 34px; min-width: 34px; padding: 0 9px; border-radius: 9px;
+      cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    }
+    .icon-btn.active { background: var(--accent); color: #fff; }
+    .pomo-pill {
+      font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12px;
+      padding: 0 10px; border-radius: 999px; background: rgba(200,125,50,0.2);
+      border: 1px solid rgba(200,125,50,0.5); color: #f6c48a;
+    }
+
+    #stage {
+      position: relative; z-index: 2; flex: 1;
+      display: flex; align-items: center; justify-content: center;
+      padding: 58px 12px 72px; perspective: 1800px; overflow: hidden;
+    }
+    .book-frame {
+      position: relative; width: min(760px, 100%); height: 100%;
+      border-radius: 6px 12px 12px 6px;
+      box-shadow: 0 22px 60px rgba(0,0,0,0.55), inset 14px 0 24px rgba(0,0,0,0.08);
+      overflow: hidden; background: var(--page-bg); color: var(--page-ink);
+      transition: background 0.25s, color 0.25s;
+    }
+    .page-layer {
+      position: absolute; inset: 0; overflow-y: auto;
+      background: var(--page-bg); color: var(--page-ink);
+      user-select: text; -webkit-user-select: text;
+    }
+    .page-layer.texture-parchment {
+      background-image: radial-gradient(rgba(130,90,40,0.08) 1px, transparent 0);
+      background-size: 16px 16px;
+    }
+    .page-layer.texture-linen {
+      background-image: repeating-linear-gradient(0deg, rgba(0,0,0,0.025) 0 1px, transparent 1px 4px),
+                        repeating-linear-gradient(90deg, rgba(0,0,0,0.025) 0 1px, transparent 1px 4px);
+    }
+
+    #curlOverlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 30; display: none;
+    }
+    .curl-leaf {
+      position: absolute; top: 0; bottom: 0; right: 0; width: 0;
+      background: linear-gradient(90deg, rgba(0,0,0,0.22) 0%, rgba(255,255,255,0.45) 18%, var(--page-bg) 42%, rgba(0,0,0,0.14) 100%);
+      box-shadow: -12px 0 28px rgba(0,0,0,0.32);
+      transform-origin: left center;
+    }
+    .anim-flip { animation: flip3d 0.42s cubic-bezier(.22,.61,.36,1); }
+    .anim-slide { animation: slideIn 0.28s ease; }
+    @keyframes flip3d {
+      0% { transform: rotateY(-28deg) scale(0.98); opacity: 0.7; }
+      100% { transform: rotateY(0deg) scale(1); opacity: 1; }
+    }
+    @keyframes slideIn {
+      0% { transform: translateX(32px); opacity: 0.6; }
+      100% { transform: translateX(0); opacity: 1; }
+    }
+
+    #dogEar {
+      position: absolute; top: 0; right: 0; width: 42px; height: 42px; z-index: 25;
+      cursor: pointer; background: transparent;
+    }
+    #dogEar.marked::after {
+      content: ''; position: absolute; top: 0; right: 0;
+      border-style: solid; border-width: 0 36px 36px 0;
+      border-color: transparent #d97706 transparent transparent;
+      filter: drop-shadow(-2px 2px 3px rgba(0,0,0,0.3));
+    }
+
+    .reflow-book-page {
+      font-family: var(--book-font); font-size: var(--book-size);
+      line-height: var(--book-lh); padding: var(--book-pad);
+      min-height: 100%; word-wrap: break-word;
+    }
+    .reflow-book-page h2, .reflow-book-page h3 { margin: 0.85em 0 0.45em; line-height: 1.3; }
+    .reflow-book-page p { margin-bottom: 0.9em; }
+    .reflow-book-page table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 0.9em; }
+    .reflow-book-page th, .reflow-book-page td { border: 1px solid rgba(128,128,128,0.35); padding: 6px 8px; }
+    .reflow-figure {
+      display: block; max-width: 100%; margin: 16px auto; border-radius: 8px;
+      cursor: zoom-in; filter: none !important; box-shadow: 0 4px 16px rgba(0,0,0,0.16);
+    }
+
+    .pdf-wrap {
+      display: flex; justify-content: center; align-items: flex-start;
+      padding: 12px; min-height: 100%; position: relative;
+    }
+    .pdf-wrap canvas { max-width: 100%; height: auto; display: block; border-radius: 4px; }
+    .pdf-dark canvas { filter: invert(0.9) hue-rotate(180deg); }
+    .pdf-crop canvas { transform: scale(1.12); transform-origin: top center; }
+
+    #drawCanvas {
+      position: absolute; inset: 0; z-index: 20; pointer-events: none; touch-action: none;
+    }
+    #drawCanvas.drawing { pointer-events: auto; cursor: crosshair; }
+
+    .drawer {
+      position: fixed; top: 52px; right: 10px; bottom: 72px; width: min(360px, calc(100vw - 20px));
+      background: var(--ui-bg); backdrop-filter: blur(16px);
+      border: 1px solid var(--ui-border); border-radius: 16px;
+      z-index: 200; display: none; flex-direction: column; overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+    }
+    .drawer.open { display: flex; }
+    .drawer-head {
+      padding: 12px 14px; border-bottom: 1px solid var(--ui-border);
+      display: flex; align-items: center; justify-content: space-between; font-weight: 700;
+    }
+    .drawer-body { padding: 14px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+
+    .sec-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; opacity: 0.65; margin-bottom: 6px; }
+    .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .theme-chip {
+      padding: 8px 6px; border-radius: 9px; font-size: 11px; font-weight: 600;
+      border: 2px solid transparent; cursor: pointer; text-align: center;
+    }
+    .theme-chip.active { border-color: var(--accent); }
+
+    .slider-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+    .slider-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+
+    #selPopup {
+      position: fixed; z-index: 300; display: none; flex-direction: column; gap: 8px;
+      background: #1b1815; border: 1px solid var(--ui-border); border-radius: 12px;
+      padding: 10px; width: min(300px, 90vw); box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+    }
+    .hl-dots { display: flex; gap: 8px; align-items: center; }
+    .hl-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; }
+    .dict-box { font-size: 12px; line-height: 1.45; background: rgba(255,255,255,0.06); padding: 8px; border-radius: 8px; }
+
+    .float-bar {
+      position: fixed; bottom: 82px; left: 50%; transform: translateX(-50%);
+      z-index: 180; background: var(--ui-bg); border: 1px solid var(--ui-border);
+      border-radius: 999px; padding: 6px 12px; display: none; align-items: center; gap: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 95vw; overflow-x: auto;
+    }
+    .float-bar.open { display: flex; }
+
+    .modal-bg {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.78); z-index: 500;
+      display: none; align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      background: #1c1916; border: 1px solid var(--ui-border); border-radius: 16px;
+      width: min(520px, 100%); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .modal-body { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+
+    .input {
+      width: 100%; padding: 9px 11px; border-radius: 9px;
+      border: 1px solid var(--ui-border); background: rgba(255,255,255,0.06); color: #fff; font-size: 13px;
+    }
+
+    .fc-card {
+      min-height: 170px; border-radius: 14px; background: rgba(255,255,255,0.07);
+      border: 1px solid var(--ui-border); padding: 20px; cursor: pointer;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      text-align: center; transition: transform 0.25s;
+    }
+    .fc-card:active { transform: scale(0.98); }
+
+    #visualLightbox {
+      position: fixed; inset: 0; z-index: 9500; background: rgba(0,0,0,0.94);
+      display: none; flex-direction: column; align-items: center; justify-content: center; padding: 16px;
+    }
+    #visualLightbox img { max-width: 96vw; max-height: 85vh; border-radius: 8px; }
+
+    .scrubber-row { width: 100%; display: flex; align-items: center; gap: 10px; font-size: 12px; }
+    .scrubber-row input { flex: 1; accent-color: var(--accent); }
+    .chat-msg { padding: 8px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; }
+    .chat-user { background: rgba(200,125,50,0.22); align-self: flex-end; }
+    .chat-ai { background: rgba(255,255,255,0.07); align-self: flex-start; }
+  </style>
+</head>
+<body>
+  <div id="warmthOverlay"></div>
+  <div id="dimmerOverlay"></div>
+
+  <section id="shelfView" class="view active">
+    <div class="shelf-header">
+      <div class="brand">
+        <div class="brand-logo">F</div>
+        <div>
+          <h1>Folio</h1>
+          <small>Tactile Book & Smart PDF Reader</small>
+        </div>
+      </div>
+      <div class="shelf-actions">
+        <button class="btn btn-primary" onclick="document.getElementById('pdfInput').click()">+ Import PDF</button>
+        <button class="btn" onclick="openModal('statsModal'); renderStats();">📊 Stats</button>
+        <button class="btn" onclick="openModal('flashModal'); renderFlashcard();">🗂 Flashcards</button>
+        <button class="btn" onclick="openModal('settingsModal')">⚙️ Settings</button>
+      </div>
+    </div>
+
+    <input type="file" id="pdfInput" accept="application/pdf" hidden />
+    <div id="dropZone" class="drop-zone" onclick="document.getElementById('pdfInput').click()">
+      <p><strong>Tap to Import a PDF</strong> or drag & drop here</p>
+      <span>Automatically converts into Book Mode with reflowable text, diagrams & Gemini Deep Scan</span>
+    </div>
+
+    <div id="shelfGrid" class="shelf-grid"></div>
+  </section>
+
+  <section id="readerView" class="view">
+    <div id="deskBackdrop"></div>
+    <div id="deskTint"></div>
+
+    <div id="topBar" class="reader-bar">
+      <div class="bar-group">
+        <button class="icon-btn" onclick="closeBook()">← Shelf</button>
+        <button id="btnBookMode" class="icon-btn active" onclick="setViewMode('book')" style="display:none;">📖 Book</button>
+        <button id="btnPdfMode" class="icon-btn" onclick="setViewMode('pdf')" style="display:none;">📄 PDF</button>
+        <button id="btnDeepScan" class="icon-btn" onclick="runGeminiDeepScan()" style="display:none;" title="Gemini Vision Deep Scan">✨ Scan</button>
+      </div>
+      <div class="bar-group">
+        <button id="pomoBtn" class="icon-btn pomo-pill" onclick="cyclePomodoro()">🍅 25:00</button>
+        <button id="ttsToggleBtn" class="icon-btn" onclick="toggleFloatBar('ttsBar')" title="Read Aloud">🔊</button>
+        <button id="drawToggleBtn" class="icon-btn" onclick="toggleDrawMode()" title="Stylus Draw">✏️</button>
+        <button class="icon-btn" onclick="toggleDrawer('aaDrawer')" title="Themes & Display">Aa</button>
+        <button class="icon-btn" onclick="toggleDrawer('ambientDrawer')" title="Ambient Sounds">🎵</button>
+        <button class="icon-btn" onclick="toggleDrawer('notesDrawer'); renderNotes();" title="Highlights & Word Bank">📝</button>
+        <button class="icon-btn" onclick="toggleDrawer('geminiDrawer')" title="Gemini AI">✨ AI</button>
+      </div>
+    </div>
+
+    <div id="stage">
+      <div class="book-frame" id="bookFrame">
+        <div id="dogEar" title="Bookmark page" onclick="toggleBookmark()"></div>
+        <div id="pageContent" class="page-layer"></div>
+        <canvas id="drawCanvas"></canvas>
+        <div id="curlOverlay"><div class="curl-leaf" id="curlLeaf"></div></div>
+      </div>
+    </div>
+
+    <div id="bottomBar" class="reader-bar">
+      <div class="scrubber-row">
+        <button class="icon-btn" onclick="turnPage(-1)">◀</button>
+        <input type="range" id="pageScrubber" min="1" max="1" value="1" oninput="jumpToPage(parseInt(this.value))" />
+        <span id="pageIndicator">1 / 1</span>
+        <button class="icon-btn" onclick="turnPage(1)">▶</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="drawBar" class="float-bar">
+    <button class="btn btn-sm" onclick="setDrawTool('pen')">Pen</button>
+    <button class="btn btn-sm" onclick="setDrawTool('hl')">Highlighter</button>
+    <button class="btn btn-sm" onclick="setDrawTool('eraser')">Eraser</button>
+    <input type="color" id="drawColor" value="#e11d48" style="width:26px;height:26px;border:none;background:none;" />
+    <input type="range" id="drawSize" min="2" max="18" value="4" style="width:70px;" />
+    <button class="btn btn-sm" onclick="undoStroke()">Undo</button>
+    <button class="btn btn-sm" onclick="clearPageStrokes()">Clear</button>
+    <button class="btn btn-sm btn-primary" onclick="toggleDrawMode()">Done</button>
+  </div>
+
+  <div id="ttsBar" class="float-bar">
+    <button class="btn btn-sm btn-primary" id="ttsPlayBtn" onclick="toggleTTS()">▶ Read</button>
+    <select id="ttsSpeed" class="btn btn-sm" onchange="restartTTSIfPlaying()">
+      <option value="0.85">0.85×</option>
+      <option value="1" selected>1.0×</option>
+      <option value="1.25">1.25×</option>
+      <option value="1.5">1.5×</option>
+      <option value="2">2.0×</option>
+    </select>
+    <button class="btn btn-sm" id="sleepBtn" onclick="cycleSleepTimer()">💤 Off</button>
+    <button class="btn btn-sm" onclick="toggleFloatBar('ttsBar')">✕</button>
+  </div>
+
+  <div id="selPopup">
+    <div class="hl-dots">
+      <div class="hl-dot" style="background:#fde047;" onclick="saveHighlight('#fde047')"></div>
+      <div class="hl-dot" style="background:#86efac;" onclick="saveHighlight('#86efac')"></div>
+      <div class="hl-dot" style="background:#93c5fd;" onclick="saveHighlight('#93c5fd')"></div>
+      <div class="hl-dot" style="background:#fda4af;" onclick="saveHighlight('#fda4af')"></div>
+      <button class="btn btn-sm" onclick="lookupSelectedWord()">📖 Meaning</button>
+      <button class="btn btn-sm" onclick="askGeminiSelection()">✨ Ask AI</button>
+      <button class="btn btn-sm" onclick="hideSelPopup()">✕</button>
+    </div>
+    <div id="dictResult" class="dict-box" style="display:none;"></div>
+  </div>
+
+  <div id="aaDrawer" class="drawer">
+    <div class="drawer-head"><span>Display, Themes & Backgrounds</span><button class="icon-btn" onclick="closeDrawers()">✕</button></div>
+    <div class="drawer-body">
+      <div>
+        <div class="sec-title">12 Curated Themes</div>
+        <div class="theme-grid" id="themeGrid"></div>
+      </div>
+
+      <div>
+        <div class="sec-title">Typography (Book Mode)</div>
+        <div class="bar-group" style="margin-bottom:8px;">
+          <button class="btn btn-sm" onclick="setTypo('font','Georgia, serif')">Serif</button>
+          <button class="btn btn-sm" onclick="setTypo('font','-apple-system, sans-serif')">Sans</button>
+          <button class="btn btn-sm" onclick="setTypo('font','\'Palatino Linotype\', serif')">Book</button>
+          <button class="btn btn-sm" onclick="setTypo('font','ui-monospace, monospace')">Mono</button>
+        </div>
+        <div class="slider-row"><span>Size</span><input type="range" min="14" max="28" value="18" oninput="setTypo('size', this.value+'px')" /></div>
+        <div class="slider-row"><span>Spacing</span><input type="range" min="1.3" max="2.2" step="0.1" value="1.72" oninput="setTypo('lh', this.value)" /></div>
+        <div class="slider-row"><span>Margins</span><input type="range" min="12" max="54" value="28" oninput="setTypo('pad', this.value+'px')" /></div>
+      </div>
+
+      <div>
+        <div class="sec-title">Eye Protection & Page Feel</div>
+        <div class="slider-row"><span>Warmth Filter</span><input type="range" min="0" max="0.65" step="0.05" value="0" oninput="document.documentElement.style.setProperty('--warmth', this.value)" /></div>
+        <div class="slider-row"><span>Brightness Dim</span><input type="range" min="0" max="0.7" step="0.05" value="0" oninput="document.documentElement.style.setProperty('--dimmer', this.value)" /></div>
+        <div class="slider-row" style="margin-top:6px;">
+          <span>Turn Style</span>
+          <select id="turnStyle" class="btn btn-sm" onchange="prefs.turnStyle=this.value">
+            <option value="curl">Kindle Curl</option>
+            <option value="flip">3D Flip</option>
+            <option value="slide">Smooth Slide</option>
+            <option value="instant">Instant</option>
+          </select>
+        </div>
+        <div class="slider-row" style="margin-top:6px;">
+          <span>Page Sound</span>
+          <select id="soundStyle" class="btn btn-sm" onchange="prefs.sound=this.value">
+            <option value="crisp">Kindle Crisp</option>
+            <option value="paperback">Paperback</option>
+            <option value="silent">Silent</option>
+          </select>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:8px;">
+          <input type="checkbox" id="cropToggle" onchange="prefs.crop=this.checked; renderPage();" /> Auto-Crop PDF Margins
+        </label>
+      </div>
+
+      <div>
+        <div class="sec-title">Custom Background Studio</div>
+        <div class="slider-row">
+          <span>Page Color</span><input type="color" value="#faf6ee" onchange="setCustomColors(this.value, null)" />
+          <span>Ink Color</span><input type="color" value="#231f1a" onchange="setCustomColors(null, this.value)" />
+        </div>
+        <div class="bar-group" style="margin-top:8px;">
+          <button class="btn btn-sm" onclick="setDeskPreset('matte')">Matte</button>
+          <button class="btn btn-sm" onclick="setDeskPreset('oak')">Warm Oak</button>
+          <button class="btn btn-sm" onclick="setDeskPreset('marble')">Dark Marble</button>
+          <button class="btn btn-sm" onclick="setDeskPreset('velvet')">Velvet</button>
+          <button class="btn btn-sm" onclick="document.getElementById('bgUpload').click()">Upload Image</button>
+          <input type="file" id="bgUpload" accept="image/*" hidden onchange="uploadDeskBg(event)" />
+        </div>
+        <div class="slider-row" style="margin-top:6px;"><span>Backdrop Blur</span><input type="range" min="0" max="16" value="0" oninput="document.documentElement.style.setProperty('--desk-blur', this.value+'px')" /></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="ambientDrawer" class="drawer">
+    <div class="drawer-head"><span>Ambient Soundscapes</span><button class="icon-btn" onclick="closeDrawers()">✕</button></div>
+    <div class="drawer-body">
+      <button class="btn" onclick="toggleAmbient('rain')">🌧 Gentle Rain</button>
+      <button class="btn" onclick="toggleAmbient('fire')">🔥 Warm Fireplace</button>
+      <button class="btn" onclick="toggleAmbient('library')">🏛 Quiet Library</button>
+      <button class="btn" onclick="stopAmbient()">🔇 Stop Ambience</button>
+      <div class="slider-row"><span>Volume</span><input type="range" id="ambVol" min="0" max="0.5" step="0.02" value="0.15" oninput="updateAmbientVol(this.value)" /></div>
+    </div>
+  </div>
+
+  <div id="notesDrawer" class="drawer">
+    <div class="drawer-head"><span>Highlights & Word Bank</span><button class="icon-btn" onclick="closeDrawers()">✕</button></div>
+    <div class="drawer-body">
+      <button class="btn btn-primary btn-sm" onclick="exportNotesMarkdown()">⬇ Export Notes (.md)</button>
+      <div class="sec-title">Saved Highlights</div>
+      <div id="highlightsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+      <div class="sec-title">Word Bank</div>
+      <div id="wordBankList" style="display:flex;flex-direction:column;gap:8px;"></div>
+    </div>
+  </div>
+
+  <div id="geminiDrawer" class="drawer">
+    <div class="drawer-head"><span>Gemini Reading Companion</span><button class="icon-btn" onclick="closeDrawers()">✕</button></div>
+    <div class="drawer-body">
+      <div class="bar-group">
+        <button class="btn btn-sm" onclick="geminiQuick('Summarize this page into crisp bullet points.')">Summarize</button>
+        <button class="btn btn-sm" onclick="geminiQuick('Explain this page simply with an everyday analogy.')">Explain Simply</button>
+        <button class="btn btn-sm" onclick="geminiQuick('Convert this page into structured exam revision notes.')">Make Notes</button>
+      </div>
+      <div id="geminiChat" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;"></div>
+      <div style="display:flex;gap:6px;">
+        <input id="geminiPrompt" class="input" placeholder="Ask about this page..." onkeydown="if(event.key==='Enter') sendGeminiChat()" />
+        <button class="btn btn-primary btn-sm" onclick="sendGeminiChat()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal-bg" onclick="if(event.target===this) closeModals()">
+    <div class="modal">
+      <div class="drawer-head"><span>Settings</span><button class="icon-btn" onclick="closeModals()">✕</button></div>
+      <div class="modal-body">
+        <label style="font-size:13px;">Gemini API Key (from Google AI Studio)</label>
+        <input id="apiKeyInput" type="password" class="input" placeholder="AIza..." />
+        <button class="btn btn-primary" onclick="saveApiKey()">Save Key</button>
+        <p style="font-size:12px;opacity:0.7;">Stored locally on your device. Enables Gemini Deep Scan, contextual word meanings, AI Chat, and Quiz generation.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="statsModal" class="modal-bg" onclick="if(event.target===this) closeModals()">
+    <div class="modal">
+      <div class="drawer-head"><span>Reading Stats</span><button class="icon-btn" onclick="closeModals()">✕</button></div>
+      <div class="modal-body" id="statsBody"></div>
+    </div>
+  </div>
+
+  <div id="flashModal" class="modal-bg" onclick="if(event.target===this) closeModals()">
+    <div class="modal">
+      <div class="drawer-head"><span>Flashcard & AI Quiz Studio</span><button class="icon-btn" onclick="closeModals()">✕</button></div>
+      <div class="modal-body">
+        <div class="fc-card" id="fcCard" onclick="flipFlashcard()"></div>
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <button class="btn" onclick="nextFlashcard(-1)">◀ Prev</button>
+          <button class="btn btn-primary" onclick="generateGeminiQuiz()">✨ AI Quiz from Page</button>
+          <button class="btn" onclick="nextFlashcard(1)">Next ▶</button>
+        </div>
+        <div id="quizBox" style="font-size:13px;line-height:1.5;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="visualLightbox" onclick="this.style.display='none'">
+    <img id="lightboxImg" alt="Zoomed visual" />
+    <span style="color:#ccc;font-size:12px;margin-top:10px;">Tap anywhere to close</span>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const THEMES = [
+      { id:'paper', name:'Paper', bg:'#faf6ee', ink:'#231f1a', dark:false },
+      { id:'sepia', name:'Sepia', bg:'#f3e6cf', ink:'#3b2b1a', dark:false },
+      { id:'parchment', name:'Parchment', bg:'#efe0c1', ink:'#362717', dark:false, tex:'texture-parchment' },
+      { id:'paperback', name:'Paperback', bg:'#f1e8d6', ink:'#2b241d', dark:false },
+      { id:'ivory', name:'Ivory', bg:'#fffff5', ink:'#1f1f1c', dark:false },
+      { id:'linen', name:'Linen Rag', bg:'#f4f0e8', ink:'#2a2621', dark:false, tex:'texture-linen' },
+      { id:'sage', name:'Soft Sage', bg:'#e7efe6', ink:'#1e2d20', dark:false },
+      { id:'matcha', name:'Matcha', bg:'#eef2df', ink:'#27301b', dark:false },
+      { id:'slate', name:'Twilight', bg:'#1e2430', ink:'#d8e1f0', dark:true },
+      { id:'midnight', name:'Midnight', bg:'#111827', ink:'#e2e8f0', dark:true },
+      { id:'espresso', name:'Espresso', bg:'#1f1916', ink:'#e7d9c9', dark:true },
+      { id:'oled', name:'OLED Dark', bg:'#050505', ink:'#d6d6d6', dark:true }
+    ];
+
+    const DEMO_BOOKS = [
+      {
+        id: 'demo-1', title: 'The Art of Deep Reading', author: 'Folio Edition', type: 'text',
+        pages: [
+          `<h2>Chapter I — The Quiet Room</h2><p>Reading on glass rarely feels like holding a book, unless the interface steps out of the way. Notice how warm paper tones soften glare and let your eyes glide across paragraphs without fatigue.</p><p>Try dragging from the right edge of this page to experience the <strong>Kindle-style page curl</strong>, or tap <strong>Aa</strong> above to explore 12 curated book-page themes.</p>`,
+          `<h2>Chapter II — Active Margin Thinking</h2><p>True comprehension happens when you converse with the text. Select any word—such as <em>serendipity</em> or <em>ephemeral</em>—to inspect its meaning, highlight it in four colors, or save it straight into your offline Word Bank.</p><p>Tap the pen icon to sketch directly in the margins with a finger or tablet stylus.</p>`,
+          `<h2>Chapter III — Smart PDF Unpacking</h2><p>When you import a real PDF from your device, Folio automatically unpacks it into <strong>Book Mode</strong> so you can resize fonts, adjust line spacing, and switch to OLED Dark mode while keeping diagrams and mind maps crisp and tappable.</p><p>For scanned notes or dense tables, tap <strong>✨ Scan</strong> to run Gemini Vision Deep Scan.</p>`
+        ]
+      }
+    ];
+
+    let books = [...DEMO_BOOKS];
+    let currentBook = null;
+    let currentPage = 1;
+    let currentPdfDoc = null;
+    let viewMode = 'book';
+    let convertedCache = {};
+    let prefs = { theme: 'paper', turnStyle: 'curl', sound: 'crisp', crop: false };
+    let highlights = JSON.parse(localStorage.getItem('folio_hl') || '[]');
+    let wordBank = JSON.parse(localStorage.getItem('folio_wb') || '[{"word":"Serendipity","def":"The occurrence of finding valuable or agreeable things not sought for."}]');
+    let bookmarks = JSON.parse(localStorage.getItem('folio_bm') || '{}');
+    let strokesStore = JSON.parse(localStorage.getItem('folio_strokes') || '{}');
+    let stats = JSON.parse(localStorage.getItem('folio_stats') || '{"pages":0,"mins":0,"streak":1}');
+
+    function init() {
+      renderShelf();
+      renderThemes();
+      applyTheme('paper');
+      document.getElementById('apiKeyInput').value = localStorage.getItem('folio_gemini_key') || '';
+      setupPdfImport();
+      setupCurlGestures();
+      setupDrawing();
+      setupSelectionListener();
+      setInterval(() => { if (currentBook) { stats.mins += 0.5; localStorage.setItem('folio_stats', JSON.stringify(stats)); } }, 30000);
+    }
+
+    function renderShelf() {
+      const grid = document.getElementById('shelfGrid');
+      grid.innerHTML = books.map(b => {
+        const p = b.lastPage || 1;
+        const tot = b.totalPages || b.pages.length;
+        const pct = Math.round((p / tot) * 100);
+        return `
+          <div class="book-card" onclick="openBook('${b.id}')">
+            <div class="book-cover">
+              ${b.cover ? `<img src="${b.cover}" alt="">` : ''}
+              <div class="book-cover-title">${b.title}</div>
+            </div>
+            <div class="book-meta">
+              <div class="title">${b.title}</div>
+              <div class="prog">Page ${p} / ${tot} • ${pct}%</div>
+              <div class="prog-bar"><i style="width:${pct}%"></i></div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function setupPdfImport() {
+      const input = document.getElementById('pdfInput');
+      const dz = document.getElementById('dropZone');
+      input.onchange = e => { if (e.target.files[0]) loadPdfFile(e.target.files[0]); };
+      dz.ondragover = e => { e.preventDefault(); dz.classList.add('dragover'); };
+      dz.ondragleave = () => dz.classList.remove('dragover');
+      dz.ondrop = e => {
+        e.preventDefault(); dz.classList.remove('dragover');
+        if (e.dataTransfer.files[0]) loadPdfFile(e.dataTransfer.files[0]);
+      };
+    }
+
+    async function loadPdfFile(file) {
+      const buf = await file.arrayBuffer();
+      const pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const p1 = await pdfDoc.getPage(1);
+      const vp = p1.getViewport({ scale: 0.6 });
+      const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      await p1.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+
+      const book = {
+        id: 'pdf-' + Date.now(),
+        title: file.name.replace(/\.pdf$/i, ''),
+        type: 'pdf',
+        pdfDoc,
+        totalPages: pdfDoc.numPages,
+        lastPage: 1,
+        cover: c.toDataURL('image/jpeg', 0.75)
+      };
+      books.unshift(book);
+      renderShelf();
+      openBook(book.id);
+    }
+
+    function openBook(id) {
+      currentBook = books.find(b => b.id === id);
+      currentPage = currentBook.lastPage || 1;
+      currentPdfDoc = currentBook.type === 'pdf' ? currentBook.pdfDoc : null;
+      viewMode = 'book';
+
+      const isPdf = currentBook.type === 'pdf';
+      document.getElementById('btnBookMode').style.display = isPdf ? 'inline-flex' : 'none';
+      document.getElementById('btnPdfMode').style.display = isPdf ? 'inline-flex' : 'none';
+      document.getElementById('btnDeepScan').style.display = isPdf ? 'inline-flex' : 'none';
+
+      document.getElementById('shelfView').classList.remove('active');
+      document.getElementById('readerView').classList.add('active');
+      renderPage();
+    }
+
+    function closeBook() {
+      stopTTS();
+      currentBook = null;
+      document.getElementById('readerView').classList.remove('active');
+      document.getElementById('shelfView').classList.add('active');
+      renderShelf();
+    }
+
+    function setViewMode(mode) {
+      viewMode = mode;
+      document.getElementById('btnBookMode').classList.toggle('active', mode === 'book');
+      document.getElementById('btnPdfMode').classList.toggle('active', mode === 'pdf');
+      renderPage();
+    }
+
+    async function renderPage(animDir = 0) {
+      if (!currentBook) return;
+      const total = currentBook.totalPages || currentBook.pages.length;
+      currentPage = Math.max(1, Math.min(total, currentPage));
+      currentBook.lastPage = currentPage;
+
+      document.getElementById('pageScrubber').max = total;
+      document.getElementById('pageScrubber').value = currentPage;
+      document.getElementById('pageIndicator').textContent = `${currentPage} / ${total}`;
+      document.getElementById('dogEar').classList.toggle('marked', !!bookmarks[`${currentBook.id}_${currentPage}`]);
+
+      const container = document.getElementById('pageContent');
+      container.classList.remove('anim-flip', 'anim-slide');
+      if (animDir !== 0 && prefs.turnStyle === 'flip') { void container.offsetWidth; container.classList.add('anim-flip'); }
+      if (animDir !== 0 && prefs.turnStyle === 'slide') { void container.offsetWidth; container.classList.add('anim-slide'); }
+
+      if (currentBook.type === 'text') {
+        container.innerHTML = `<div class="reflow-book-page">${currentBook.pages[currentPage - 1]}</div>`;
+      } else if (viewMode === 'book') {
+        container.innerHTML = `<div class="reflow-book-page"><p style="opacity:0.6;">Unpacking page ${currentPage}...</p></div>`;
+        container.innerHTML = await localExtractPdfPage(currentPdfDoc, currentPage, currentBook.id);
+      } else {
+        const themeObj = THEMES.find(t => t.id === prefs.theme) || THEMES[0];
+        container.innerHTML = `<div class="pdf-wrap ${themeObj.dark ? 'pdf-dark' : ''} ${prefs.crop ? 'pdf-crop' : ''}"><canvas id="pdfCanvas"></canvas></div>`;
+        const page = await currentPdfDoc.getPage(currentPage);
+        const vp = page.getViewport({ scale: 1.5 });
+        const canvas = document.getElementById('pdfCanvas');
+        canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      }
+
+      loadPageStrokes();
+    }
+
+    async function localExtractPdfPage(pdfDoc, pageNum, bookId) {
+      const key = `${bookId}_${pageNum}`;
+      if (convertedCache[key]) return convertedCache[key];
+
+      const page = await pdfDoc.getPage(pageNum);
+      const tc = await page.getTextContent();
+      const ops = await page.getOperatorList();
+      const hasImages = ops.fnArray.some(fn =>
+        fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintInlineImageXObject
+      );
+
+      let html = '', line = '', lastY = null, maxF = 0;
+      for (const item of tc.items) {
+        const fs = Math.abs(item.transform[0] || 12);
+        if (fs > maxF) maxF = fs;
+        const y = Math.round(item.transform[5]);
+        if (lastY !== null && Math.abs(y - lastY) > fs * 1.4) {
+          if (line.trim()) html += (fs >= maxF * 1.15 && line.length < 90) ? `<h3>${line.trim()}</h3>` : `<p>${line.trim()}</p>`;
+          line = item.str;
+        } else {
+          line += (line && !line.endsWith(' ') ? ' ' : '') + item.str;
+        }
+        lastY = y;
+      }
+      if (line.trim()) html += `<p>${line.trim()}</p>`;
+
+      if (hasImages || !html.trim()) {
+        const vp = page.getViewport({ scale: 1.5 });
+        const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+        await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+        html += `<img class="reflow-figure" src="${c.toDataURL('image/webp', 0.88)}" onclick="openLightbox(this.src)" alt="Extracted visual" />`;
+      }
+
+      convertedCache[key] = `<div class="reflow-book-page">${html}</div>`;
+      return convertedCache[key];
+    }
+
+    async function runGeminiDeepScan() {
+      const apiKey = localStorage.getItem('folio_gemini_key');
+      if (!apiKey) { openModal('settingsModal'); return; }
+      if (!currentPdfDoc) return;
+
+      const btn = document.getElementById('btnDeepScan');
+      btn.textContent = '⏳...';
+      try {
+        const page = await currentPdfDoc.getPage(currentPage);
+        const vp = page.getViewport({ scale: 1.5 });
+        const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+        await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+        const fullSrc = c.toDataURL('image/jpeg', 0.85);
+        const b64 = fullSrc.split(',')[1];
+
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [
+              { text: 'Convert this PDF page into clean semantic HTML (<h2>, <h3>, <p>, <ul>, <table>). Preserve every word, fact, and number without summarizing. If there is a diagram, chart, or mind map, insert [VISUAL_DIAGRAM] where it belongs. Return ONLY raw HTML.' },
+              { inline_data: { mime_type: 'image/jpeg', data: b64 } }
+            ]}]
+          })
+        });
+        const data = await res.json();
+        let out = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/```html|```/g, '').trim();
+        out = out.replace(/\[VISUAL_DIAGRAM\]/g, `<img class="reflow-figure" src="${fullSrc}" onclick="openLightbox(this.src)" alt="Diagram" />`);
+        convertedCache[`${currentBook.id}_${currentPage}`] = `<div class="reflow-book-page">${out}</div>`;
+        setViewMode('book');
+      } catch (e) {
+        alert('Deep Scan failed: ' + e.message);
+      } finally {
+        btn.textContent = '✨ Scan';
+      }
+    }
+
+    function openLightbox(src) {
+      document.getElementById('lightboxImg').src = src;
+      document.getElementById('visualLightbox').style.display = 'flex';
+    }
+
+    function turnPage(delta) {
+      if (!currentBook) return;
+      const total = currentBook.totalPages || currentBook.pages.length;
+      const next = currentPage + delta;
+      if (next < 1 || next > total) return;
+      playPaperSound();
+      stats.pages++; localStorage.setItem('folio_stats', JSON.stringify(stats));
+      currentPage = next;
+      renderPage(delta);
+    }
+    function jumpToPage(p) { currentPage = p; renderPage(0); }
+
+    function setupCurlGestures() {
+      const frame = document.getElementById('bookFrame');
+      const overlay = document.getElementById('curlOverlay');
+      const leaf = document.getElementById('curlLeaf');
+      let startX = 0, dragging = false;
+
+      frame.addEventListener('pointerdown', e => {
+        if (isDrawing) return;
+        const rect = frame.getBoundingClientRect();
+        const relX = (e.clientX - rect.left) / rect.width;
+        if (relX > 0.78 || relX < 0.22) {
+          startX = e.clientX; dragging = true;
+          if (prefs.turnStyle === 'curl') overlay.style.display = 'block';
+        }
+      });
+
+      frame.addEventListener('pointermove', e => {
+        if (!dragging || prefs.turnStyle !== 'curl') return;
+        const dx = startX - e.clientX;
+        const w = Math.min(frame.clientWidth * 0.85, Math.abs(dx));
+        leaf.style.width = w + 'px';
+        leaf.style.right = dx >= 0 ? '0px' : 'auto';
+        leaf.style.left = dx < 0 ? '0px' : 'auto';
+      });
+
+      frame.addEventListener('pointerup', e => {
+        if (!dragging) return;
+        dragging = false;
+        overlay.style.display = 'none';
+        leaf.style.width = '0px';
+        const dx = startX - e.clientX;
+        if (Math.abs(dx) > 45) turnPage(dx > 0 ? 1 : -1);
+      });
+
+      document.addEventListener('keydown', e => {
+        if (!currentBook) return;
+        if (e.key === 'ArrowRight') turnPage(1);
+        if (e.key === 'ArrowLeft') turnPage(-1);
+      });
+    }
+
+    let audioCtx;
+    function getAudioCtx() { return audioCtx || (audioCtx = new (window.AudioContext || window.webkitAudioContext)()); }
+
+    function playPaperSound() {
+      if (prefs.sound === 'silent') return;
+      const ctx = getAudioCtx();
+      const dur = prefs.sound === 'crisp' ? 0.22 : 0.32;
+      const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) {
+        const t = i / data.length;
+        const env = Math.sin(t * Math.PI) * (0.6 + 0.4 * Math.sin(t * 28));
+        data[i] = (Math.random() * 2 - 1) * env * 0.28;
+      }
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      const filter = ctx.createBiquadFilter(); filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(prefs.sound === 'crisp' ? 1600 : 950, ctx.currentTime);
+      filter.frequency.exponentialRampToValueAtTime(420, ctx.currentTime + dur);
+      src.connect(filter); filter.connect(ctx.destination);
+      src.start();
+    }
+
+    function renderThemes() {
+      document.getElementById('themeGrid').innerHTML = THEMES.map(t => `
+        <button class="theme-chip" id="th-${t.id}" style="background:${t.bg};color:${t.ink};" onclick="applyTheme('${t.id}')">${t.name}</button>
+      `).join('');
+    }
+
+    function applyTheme(id) {
+      prefs.theme = id;
+      const t = THEMES.find(x => x.id === id) || THEMES[0];
+      document.documentElement.style.setProperty('--page-bg', t.bg);
+      document.documentElement.style.setProperty('--page-ink', t.ink);
+      const pc = document.getElementById('pageContent');
+      pc.classList.remove('texture-parchment', 'texture-linen');
+      if (t.tex) pc.classList.add(t.tex);
+      document.querySelectorAll('.theme-chip').forEach(el => el.classList.toggle('active', el.id === 'th-' + id));
+      if (currentBook && viewMode === 'pdf') renderPage();
+    }
+
+    function setTypo(k, v) {
+      const m = { font: '--book-font', size: '--book-size', lh: '--book-lh', pad: '--book-pad' };
+      document.documentElement.style.setProperty(m[k], v);
+    }
+    function setCustomColors(bg, ink) {
+      if (bg) document.documentElement.style.setProperty('--page-bg', bg);
+      if (ink) document.documentElement.style.setProperty('--page-ink', ink);
+    }
+    function setDeskPreset(p) {
+      const map = {
+        matte: '#1e1b18',
+        oak: 'linear-gradient(135deg, #4b311e, #2b1a0e)',
+        marble: 'linear-gradient(135deg, #27272a, #09090b)',
+        velvet: 'linear-gradient(135deg, #1e1b4b, #0f172a)'
+      };
+      document.getElementById('deskBackdrop').style.background = map[p];
+    }
+    function uploadDeskBg(e) {
+      const f = e.target.files[0]; if (!f) return;
+      const r = new FileReader();
+      r.onload = () => { document.getElementById('deskBackdrop').style.backgroundImage = `url(${r.result})`; };
+      r.readAsDataURL(f);
+    }
+
+    let selectedText = '';
+    function setupSelectionListener() {
+      document.addEventListener('mouseup', checkSelection);
+      document.addEventListener('touchend', () => setTimeout(checkSelection, 200));
+    }
+    function checkSelection() {
+      if (!currentBook || isDrawing) return;
+      const sel = window.getSelection();
+      const txt = sel.toString().trim();
+      if (!txt) return;
+      selectedText = txt;
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      const pop = document.getElementById('selPopup');
+      pop.style.display = 'flex';
+      pop.style.left = Math.max(10, Math.min(window.innerWidth - 310, rect.left)) + 'px';
+      pop.style.top = Math.max(60, rect.top - 70) + 'px';
+      document.getElementById('dictResult').style.display = 'none';
+    }
+    function hideSelPopup() { document.getElementById('selPopup').style.display = 'none'; window.getSelection().removeAllRanges(); }
+
+    function saveHighlight(color) {
+      highlights.unshift({ book: currentBook.title, page: currentPage, text: selectedText, color });
+      localStorage.setItem('folio_hl', JSON.stringify(highlights));
+      hideSelPopup();
+    }
+
+    async function lookupSelectedWord() {
+      const box = document.getElementById('dictResult');
+      box.style.display = 'block';
+      const word = selectedText.split(/\s+/)[0].replace(/[^a-zA-Z-]/g, '');
+      box.textContent = `Looking up "${word}"...`;
+      try {
+        const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+        const data = await res.json();
+        const def = data[0]?.meanings?.[0]?.definitions?.[0]?.definition;
+        if (def) {
+          box.innerHTML = `<strong>${word}</strong>: ${def}`;
+          wordBank.unshift({ word, def });
+          localStorage.setItem('folio_wb', JSON.stringify(wordBank));
+        } else {
+          box.textContent = 'No standard dictionary match. Tap "✨ Ask AI" for contextual meaning.';
+        }
+      } catch { box.textContent = 'Offline or not found.'; }
+    }
+
+    function renderNotes() {
+      document.getElementById('highlightsList').innerHTML = highlights.length
+        ? highlights.map(h => `<div class="chat-msg" style="border-left:4px solid ${h.color};background:rgba(255,255,255,0.06);">"${h.text}"<br><small style="opacity:0.6;">${h.book} • p.${h.page}</small></div>`).join('')
+        : '<small style="opacity:0.6;">Select text to highlight.</small>';
+      document.getElementById('wordBankList').innerHTML = wordBank.map(w => `<div class="chat-msg chat-ai"><strong>${w.word}</strong>: ${w.def}</div>`).join('');
+    }
+
+    function exportNotesMarkdown() {
+      let md = `# Folio Notes & Word Bank\n\n## Highlights\n`;
+      highlights.forEach(h => { md += `- "${h.text}" *(${h.book}, p.${h.page})*\n`; });
+      md += `\n## Word Bank\n`;
+      wordBank.forEach(w => { md += `- **${w.word}**: ${w.def}\n`; });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }));
+      a.download = 'folio-notes.md'; a.click();
+    }
+
+    function toggleBookmark() {
+      const k = `${currentBook.id}_${currentPage}`;
+      bookmarks[k] = !bookmarks[k];
+      localStorage.setItem('folio_bm', JSON.stringify(bookmarks));
+      document.getElementById('dogEar').classList.toggle('marked', !!bookmarks[k]);
+    }
+
+    let isDrawing = false, drawTool = 'pen', activeStroke = null, pageStrokes = [];
+    function toggleDrawMode() {
+      isDrawing = !isDrawing;
+      document.getElementById('drawCanvas').classList.toggle('drawing', isDrawing);
+      document.getElementById('drawToggleBtn').classList.toggle('active', isDrawing);
+      document.getElementById('drawBar').classList.toggle('open', isDrawing);
+      resizeDrawCanvas();
+    }
+    function setDrawTool(t) { drawTool = t; }
+    function resizeDrawCanvas() {
+      const c = document.getElementById('drawCanvas');
+      const f = document.getElementById('bookFrame');
+      c.width = f.clientWidth; c.height = f.clientHeight;
+      redrawStrokes();
+    }
+    function setupDrawing() {
+      const c = document.getElementById('drawCanvas');
+      c.addEventListener('pointerdown', e => {
+        if (!isDrawing) return;
+        const r = c.getBoundingClientRect();
+        activeStroke = {
+          tool: drawTool, color: document.getElementById('drawColor').value,
+          size: parseInt(document.getElementById('drawSize').value),
+          pts: [[e.clientX - r.left, e.clientY - r.top]]
+        };
+        pageStrokes.push(activeStroke);
+      });
+      c.addEventListener('pointermove', e => {
+        if (!activeStroke) return;
+        const r = c.getBoundingClientRect();
+        activeStroke.pts.push([e.clientX - r.left, e.clientY - r.top]);
+        redrawStrokes();
+      });
+      c.addEventListener('pointerup', () => {
+        if (!activeStroke) return;
+        activeStroke = null;
+        strokesStore[`${currentBook.id}_${currentPage}`] = pageStrokes;
+        localStorage.setItem('folio_strokes', JSON.stringify(strokesStore));
+      });
+    }
+    function loadPageStrokes() {
+      pageStrokes = strokesStore[`${currentBook.id}_${currentPage}`] || [];
+      resizeDrawCanvas();
+    }
+    function redrawStrokes() {
+      const c = document.getElementById('drawCanvas');
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
+      for (const s of pageStrokes) {
+        ctx.save();
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.lineWidth = s.tool === 'hl' ? s.size * 3 : s.size;
+        ctx.strokeStyle = s.tool === 'eraser' ? '#000' : s.color;
+        ctx.globalAlpha = s.tool === 'hl' ? 0.35 : 1;
+        ctx.globalCompositeOperation = s.tool === 'eraser' ? 'destination-out' : 'source-over';
+        ctx.beginPath();
+        s.pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    function undoStroke() { pageStrokes.pop(); redrawStrokes(); }
+    function clearPageStrokes() { pageStrokes = []; strokesStore[`${currentBook.id}_${currentPage}`] = []; redrawStrokes(); }
+
+    let ttsPlaying = false, sleepTimer = null, sleepMins = 0;
+    function toggleTTS() {
+      if (ttsPlaying) { stopTTS(); return; }
+      const text = document.getElementById('pageContent').innerText.trim();
+      if (!text) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = parseFloat(document.getElementById('ttsSpeed').value);
+      u.onend = () => { ttsPlaying = false; document.getElementById('ttsPlayBtn').textContent = '▶ Read'; };
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+      ttsPlaying = true; document.getElementById('ttsPlayBtn').textContent = '⏸ Pause';
+    }
+    function stopTTS() { speechSynthesis.cancel(); ttsPlaying = false; document.getElementById('ttsPlayBtn').textContent = '▶ Read'; }
+    function restartTTSIfPlaying() { if (ttsPlaying) { stopTTS(); toggleTTS(); } }
+    function cycleSleepTimer() {
+      const opts = [0, 15, 30, 60];
+      sleepMins = opts[(opts.indexOf(sleepMins) + 1) % opts.length];
+      clearTimeout(sleepTimer);
+      document.getElementById('sleepBtn').textContent = sleepMins ? `💤 ${sleepMins}m` : '💤 Off';
+      if (sleepMins) sleepTimer = setTimeout(() => { stopTTS(); stopAmbient(); sleepMins = 0; document.getElementById('sleepBtn').textContent = '💤 Off'; }, sleepMins * 60000);
+    }
+
+    let ambNode = null, ambGain = null;
+    function toggleAmbient(type) {
+      stopAmbient();
+      const ctx = getAudioCtx();
+      const buf = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      let last = 0;
+      for (let i = 0; i < d.length; i++) {
+        const w = Math.random() * 2 - 1;
+        last = (last + 0.04 * w) / 1.04;
+        d[i] = type === 'rain' ? w * 0.25 : last * 1.8;
+      }
+      ambNode = ctx.createBufferSource(); ambNode.buffer = buf; ambNode.loop = true;
+      const filter = ctx.createBiquadFilter(); filter.type = 'lowpass';
+      filter.frequency.value = type === 'rain' ? 1400 : type === 'fire' ? 420 : 280;
+      ambGain = ctx.createGain(); ambGain.gain.value = parseFloat(document.getElementById('ambVol').value);
+      ambNode.connect(filter); filter.connect(ambGain); ambGain.connect(ctx.destination);
+      ambNode.start();
+    }
+    function stopAmbient() { if (ambNode) { try { ambNode.stop(); } catch {} ambNode = null; } }
+    function updateAmbientVol(v) { if (ambGain) ambGain.gain.value = parseFloat(v); }
+
+    let pomoSecs = 1500, pomoInterval = null;
+    function cyclePomodoro() {
+      if (pomoInterval) { clearInterval(pomoInterval); pomoInterval = null; pomoSecs = 1500; document.getElementById('pomoBtn').textContent = '🍅 25:00'; return; }
+      pomoInterval = setInterval(() => {
+        pomoSecs--;
+        const m = String(Math.floor(pomoSecs / 60)).padStart(2, '0');
+        const s = String(pomoSecs % 60).padStart(2, '0');
+        document.getElementById('pomoBtn').textContent = `🍅 ${m}:${s}`;
+        if (pomoSecs <= 0) { clearInterval(pomoInterval); pomoInterval = null; alert('Focus session complete!'); }
+      }, 1000);
+    }
+    function renderStats() {
+      document.getElementById('statsBody').innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
+          <div class="chat-msg chat-ai"><h3>${stats.streak}</h3><small>Day Streak</small></div>
+          <div class="chat-msg chat-ai"><h3>${stats.pages}</h3><small>Pages Read</small></div>
+          <div class="chat-msg chat-ai"><h3>${Math.round(stats.mins)}m</h3><small>Reading Time</small></div>
+        </div>
+        <p style="font-size:12px;opacity:0.7;">Saved Highlights: ${highlights.length} • Word Bank: ${wordBank.length} words</p>`;
+    }
+
+    function saveApiKey() {
+      localStorage.setItem('folio_gemini_key', document.getElementById('apiKeyInput').value.trim());
+      closeModals();
+    }
+    async function callGemini(prompt) {
+      const key = localStorage.getItem('folio_gemini_key');
+      if (!key) { openModal('settingsModal'); return 'Please add your Gemini API key in Settings first.'; }
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response.';
+    }
+    async function sendGeminiChat(customPrompt) {
+      const inp = document.getElementById('geminiPrompt');
+      const q = customPrompt || inp.value.trim(); if (!q) return;
+      inp.value = '';
+      const chat = document.getElementById('geminiChat');
+      chat.innerHTML += `<div class="chat-msg chat-user">${q}</div>`;
+      const pageTxt = document.getElementById('pageContent').innerText.slice(0, 3500);
+      const ans = await callGemini(`Context from current book page:\n${pageTxt}\n\nUser request: ${q}`);
+      chat.innerHTML += `<div class="chat-msg chat-ai">${ans.replace(/\n/g, '<br>')}</div>`;
+      chat.scrollTop = chat.scrollHeight;
+    }
+    function geminiQuick(p) { sendGeminiChat(p); }
+    function askGeminiSelection() {
+      hideSelPopup(); toggleDrawer('geminiDrawer');
+      sendGeminiChat(`Explain this selected passage/word in the context of the page: "${selectedText}"`);
+    }
+
+    let fcIdx = 0, fcFlipped = false;
+    function renderFlashcard() {
+      const cards = [...wordBank.map(w => ({ f: w.word, b: w.def })), ...highlights.map(h => ({ f: `Highlight (p.${h.page})`, b: h.text }))];
+      const box = document.getElementById('fcCard');
+      if (!cards.length) { box.innerHTML = 'No cards yet.'; return; }
+      fcIdx = (fcIdx + cards.length) % cards.length;
+      const c = cards[fcIdx];
+      box.innerHTML = `<small style="opacity:0.6;margin-bottom:8px;">${fcFlipped ? 'ANSWER' : 'TAP TO FLIP'} (${fcIdx+1}/${cards.length})</small><div><strong>${fcFlipped ? c.b : c.f}</strong></div>`;
+    }
+    function flipFlashcard() { fcFlipped = !fcFlipped; renderFlashcard(); }
+    function nextFlashcard(d) { fcIdx += d; fcFlipped = false; renderFlashcard(); }
+    async function generateGeminiQuiz() {
+      const box = document.getElementById('quizBox');
+      box.textContent = 'Generating quiz...';
+      const txt = document.getElementById('pageContent')?.innerText?.slice(0, 2000) || 'General reading comprehension';
+      const q = await callGemini(`Create 2 short multiple-choice quiz questions with answers at the bottom based on this text:\n${txt}`);
+      box.innerHTML = q.replace(/\n/g, '<br>');
+    }
+
+    function toggleDrawer(id) {
+      const el = document.getElementById(id);
+      const open = el.classList.contains('open');
+      closeDrawers();
+      if (!open) el.classList.add('open');
+    }
+    function closeDrawers() { document.querySelectorAll('.drawer').forEach(d => d.classList.remove('open')); }
+    function toggleFloatBar(id) { document.getElementById(id).classList.toggle('open'); }
+    function openModal(id) { document.getElementById(id).classList.add('open'); }
+    function closeModals() { document.querySelectorAll('.modal-bg').forEach(m => m.classList.remove('open')); }
+
+    init();
+  </script>
+</body>
+</html>
